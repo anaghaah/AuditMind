@@ -32,13 +32,17 @@ AuditMind is an enterprise-grade Retrieval-Augmented Generation (RAG) system bui
    pip install -r requirements.txt
 
 2. **Configure API Keys:**
+    ```bash
     GEMINI_API_KEY=your_gemini_api_key
 
 3. **Ingest Financial Documents:**
+    ```bash
     python -m app.ingestion
 
 4. **Launch Interactive Streamlit App:**
+    ```bash
     streamlit run app/ui.py
 
 5. **Run Accuracy Benchmarks:**
+    ```bash
     python evals/test_rag.py
