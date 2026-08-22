@@ -1,5 +1,7 @@
 # ⚡ AuditMind AI — 10-K Compliance & Financial Audit Engine
 
+🔗 **Live Demo:** [auditmind-ai.streamlit.app](https://auditmind-ai.streamlit.app)
+
 AuditMind is an enterprise-grade Retrieval-Augmented Generation (RAG) system built to audit financial SEC 10-K filings, verify revenue streams, trace performance obligations, and provide precise source page citations with zero hallucination.
 
 ---
