@@ -15,6 +15,7 @@ Rules:
 1. Answer the question directly using facts and numbers from the context.
 2. At the end of your answer, include a dedicated "Sources & Citations" section listing the Document Name and Page Number(s) referenced.
 3. If the answer is not contained in the context, state: "The provided document does not contain this specific information."
+4. If the user's question is ambiguous or does not specify a company when multiple companies are available in the context, ask the user to specify which company they are inquiring about.
 
 Context:
 {context}
