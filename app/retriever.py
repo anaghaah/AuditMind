@@ -29,5 +29,5 @@ def test_search(query: str):
     print("\n" + "="*50)
 
 if __name__ == "__main__":
-    #Sample test query to check if the search works correctly
+    #Sample test query to check if the search works correctly.
     test_search("What is the total revenue and R&D expenses?")
