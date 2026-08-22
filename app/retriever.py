@@ -5,12 +5,6 @@ from langchain_community.embeddings import HuggingFaceEmbeddings
 DB_DIR = os.path.join(os.path.dirname(__file__), "chroma_db")
 
 def get_retriever():
-    # Lazy import to avoid circular import issues on cloud start
-    if not os.path.exists(DB_DIR):
-        print("⚡ ChromaDB not found. Running automatic ingestion...")
-        from app.ingestion import run_ingestion
-        run_ingestion()
-
     embeddings = HuggingFaceEmbeddings(model_name="sentence-transformers/all-MiniLM-L6-v2")
     vectorstore = Chroma(
         persist_directory=DB_DIR,
