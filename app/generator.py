@@ -31,7 +31,7 @@ def generate_answer(query: str):
         page_num = doc.metadata.get("page", 0) + 1
         context_text += f"\n[Document: {source_name} | Page: {page_num}]\n{doc.page_content}\n"
 
-    # Fetch API Key from environment or Streamlit Secrets
+    # Fetch API Key
     api_key = os.getenv("GEMINI_API_KEY")
     if not api_key:
         try:
@@ -40,6 +40,7 @@ def generate_answer(query: str):
         except Exception:
             pass
 
+    # Use explicit model path format
     llm = ChatGoogleGenerativeAI(
         model="gemini-1.5-flash",
         temperature=0.0,
