@@ -5,39 +5,49 @@ from app.retriever import get_retriever
 
 SYSTEM_PROMPT = """
 You are AuditMind AI, an enterprise-grade financial auditing assistant specialized in SEC 10-K filings.
-Analyze the provided context documents and prior conversation history carefully to answer the user's inquiry accurately.
+Analyze the provided context documents and immediate prior conversation turn carefully to answer the user's inquiry accurately.
 
 STRICT AUDIT RULES:
-1. Grounding: Rely ONLY on the provided Context and Conversation History. Do NOT use outside general knowledge or hallucinate.
-2. Disambiguation: If the user asks for financial metrics without specifying a company, and no company is identifiable from recent messages, ask: "Which company's filings would you like me to audit? (e.g., Apple, Microsoft, NVIDIA)".
-3. Conversation Continuity: If the user provides a follow-up answer or comparison, evaluate it in context with previous messages and provided filings.
-4. Precision: Cite exact fiscal years and monetary figures directly from the source text.
-5. Source Attribution: Always specify the source document name and page number for every data point.
+1. Grounding: Rely ONLY on the provided Context and Immediate Prior Turn. Do NOT use outside general knowledge or hallucinate.
+2. Disambiguation: If the current query asks for financial metrics without specifying a company, and no company is identifiable from the immediately preceding message, ask: "Which company's filings would you like me to audit? (e.g., Apple, Microsoft, NVIDIA)".
+3. Precision: Cite exact fiscal years and monetary figures directly from the source text.
+4. Source Attribution: Always specify the source document name and page number for every data point.
 """
 
 def generate_answer(query: str, chat_history: list = None):
     retriever = get_retriever(k=8)
     
-    # Check for comparative or multi-entity context
+    # Extract ONLY the immediate last turn (last user prompt & assistant response)
+    history_context = ""
+    last_user_query = ""
+    if chat_history and len(chat_history) > 1:
+        # Get only the last 2 messages (1 user, 1 assistant)
+        immediate_prior_turn = chat_history[-2:]
+        recent_turns = [f"{'User' if m['role'] == 'user' else 'Auditor'}: {m['content']}" for m in immediate_prior_turn]
+        history_context = "\n".join(recent_turns)
+        
+        # Identify the previous user prompt for retrieval context if needed
+        for m in reversed(immediate_prior_turn):
+            if m["role"] == "user":
+                last_user_query = m["content"]
+                break
+
     companies = ["apple", "microsoft", "nvidia"]
     mentioned_companies = [c for c in companies if c in query.lower()]
 
-    # If it's a comparison or follow-up, retrieve for individual entities to prevent one dominating the vector search
     relevant_docs = []
     if "compare" in query.lower() or len(mentioned_companies) > 1:
-        # Retrieve specifically for the new query
         relevant_docs.extend(retriever.invoke(query))
         for comp in mentioned_companies:
             relevant_docs.extend(retriever.invoke(f"{comp} total revenue net income financial results"))
     else:
-        # Standard retrieval with clean context
         search_query = query
-        if chat_history and len(query.strip().split()) <= 3:
-            last_user_prompt = next((m["content"] for m in reversed(chat_history) if m["role"] == "user"), "")
-            search_query = f"{last_user_prompt} {query}"
+        # If the user typed a short follow-up (<= 3 words), attach only the immediate previous question
+        if last_user_query and len(query.strip().split()) <= 3:
+            search_query = f"{last_user_query} {query}"
         relevant_docs = retriever.invoke(search_query)
 
-    # Deduplicate documents by content and source
+    # Deduplicate documents
     seen_chunks = set()
     unique_docs = []
     for doc in relevant_docs:
@@ -51,11 +61,6 @@ def generate_answer(query: str, chat_history: list = None):
         source_name = os.path.basename(doc.metadata.get("source", "Unknown"))
         page_num = doc.metadata.get("page", 0) + 1
         context_text += f"\n[Document: {source_name} | Page: {page_num}]\n{doc.page_content}\n"
-
-    history_context = ""
-    if chat_history:
-        recent_turns = [f"{'User' if m['role'] == 'user' else 'Auditor'}: {m['content']}" for m in chat_history[-4:]]
-        history_context = "\n".join(recent_turns)
 
     api_key = None
     try:
@@ -73,13 +78,13 @@ def generate_answer(query: str, chat_history: list = None):
     
     prompt_content = f"""{SYSTEM_PROMPT}
 
-Recent Conversation History:
-{history_context}
+Immediate Previous Turn:
+{history_context if history_context else 'None'}
 
 Retrieved SEC Filings Context:
 {context_text}
 
-Latest User Query: {query}
+Current User Query: {query}
 
 Audit Answer:"""
 
@@ -100,7 +105,6 @@ Audit Answer:"""
     else:
         answer_text = f"API Error: {res.text}"
 
-    # Extract matching sources from the cited docs
     used_sources = []
     for doc in unique_docs:
         source_name = os.path.basename(doc.metadata.get("source", "Unknown"))
