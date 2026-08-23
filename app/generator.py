@@ -1,4 +1,5 @@
 import os
+import time
 import requests
 import streamlit as st
 from app.retriever import get_retriever
@@ -14,7 +15,6 @@ STRICT AUDIT RULES:
 5. Source Attribution: Always specify the source document name and page number for every data point."""
 
 def generate_answer(query: str, chat_history: list = None):
-    # Retrieve top 10 chunks to ensure financial statement tables are captured
     retriever = get_retriever(k=10)
     
     # Extract only the immediate previous turn
@@ -35,7 +35,6 @@ def generate_answer(query: str, chat_history: list = None):
 
     relevant_docs = []
     
-    # Multi-entity comparative query
     if "compare" in query.lower() or len(mentioned_companies) > 1:
         relevant_docs.extend(retriever.invoke(query))
         for comp in mentioned_companies:
@@ -43,12 +42,10 @@ def generate_answer(query: str, chat_history: list = None):
     else:
         search_query = query
         if last_user_query and len(query.strip().split()) <= 3:
-            # Expand entity follow-up to match income statement terminology
             search_query = f"{query} {last_user_query} Consolidated Statements of Income Operations total revenue net sales"
-        
         relevant_docs = retriever.invoke(search_query)
 
-    # Deduplicate retrieved document chunks
+    # Deduplicate documents
     seen_chunks = set()
     unique_docs = []
     for doc in relevant_docs:
@@ -92,9 +89,7 @@ Audit Answer:"""
 
     payload = {
         "contents": [
-            {
-                "parts": [{"text": user_prompt}]
-            }
+            {"parts": [{"text": user_prompt}]}
         ],
         "generationConfig": {
             "temperature": 0.1
@@ -104,34 +99,41 @@ Audit Answer:"""
     url = f"https://generativelanguage.googleapis.com/v1beta/models/gemini-3.6-flash:generateContent?key={api_key}"
     
     answer_text = None
-    try:
-        res = requests.post(url, json=payload, headers={"Content-Type": "application/json"}, timeout=60)
-        
-        if res.status_code == 200:
-            data = res.json()
-            candidates = data.get("candidates", [])
-            if candidates and "content" in candidates[0]:
-                parts = candidates[0]["content"].get("parts", [])
-                
-                clean_parts = []
-                for p in parts:
-                    if not p.get("thought", False) and p.get("text"):
-                        clean_parts.append(p["text"])
-                
-                if clean_parts:
-                    answer_text = "\n".join(clean_parts).strip()
-                elif parts:
-                    answer_text = parts[-1].get("text", "").strip()
-        elif res.status_code == 429:
-            answer_text = "API rate limit reached on free tier. Please wait 15 seconds and resubmit."
-        else:
-            answer_text = f"API Error ({res.status_code}): {res.text}"
-    except requests.exceptions.Timeout:
-        answer_text = "API request timed out. The server is under heavy load—please retry in a moment."
-    except Exception as e:
-        answer_text = f"Error processing audit query: {str(e)}"
+    
+    # Auto-retry loop with exponential backoff on 429 rate limits
+    for attempt in range(3):
+        try:
+            res = requests.post(url, json=payload, headers={"Content-Type": "application/json"}, timeout=60)
+            
+            if res.status_code == 200:
+                data = res.json()
+                candidates = data.get("candidates", [])
+                if candidates and "content" in candidates[0]:
+                    parts = candidates[0]["content"].get("parts", [])
+                    clean_parts = [p["text"] for p in parts if not p.get("thought", False) and p.get("text")]
+                    
+                    if clean_parts:
+                        answer_text = "\n".join(clean_parts).strip()
+                    elif parts:
+                        answer_text = parts[-1].get("text", "").strip()
+                break
+            elif res.status_code == 429:
+                # Sleep and retry automatically
+                if attempt < 2:
+                    time.sleep(6 * (attempt + 1))
+                    continue
+                else:
+                    answer_text = "API rate limit reached. Please wait 15 seconds before submitting your next prompt."
+            else:
+                answer_text = f"API Error ({res.status_code}): {res.text}"
+                break
+        except requests.exceptions.Timeout:
+            answer_text = "API request timed out. Please retry in a moment."
+            break
+        except Exception as e:
+            answer_text = f"Error processing audit query: {str(e)}"
+            break
 
-    # Clean markdown if chain-of-thought rule text leaks
     if answer_text and "Rule 2" in answer_text and "Disambiguation" in answer_text:
         answer_text = "Which company's filings would you like me to audit? (e.g., Apple, Microsoft, NVIDIA)"
 
@@ -139,7 +141,7 @@ Audit Answer:"""
     for doc in unique_docs:
         source_name = os.path.basename(doc.metadata.get("source", "Unknown"))
         page_num = doc.metadata.get("page", 0) + 1
-        if source_name in answer_text:
+        if source_name in (answer_text or ""):
             used_sources.append(f"Document Name: {source_name} | Page Number: {page_num}")
 
     final_sources = list(set(used_sources)) if used_sources else list(set([
