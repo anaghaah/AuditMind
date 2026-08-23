@@ -3,16 +3,15 @@ import requests
 import streamlit as st
 from app.retriever import get_retriever
 
-SYSTEM_PROMPT = """
-You are AuditMind AI, an enterprise-grade financial auditing assistant specialized in SEC 10-K filings.
+SYSTEM_PROMPT = """You are AuditMind AI, an enterprise-grade financial auditing assistant specialized in SEC 10-K filings.
 Analyze the provided context documents and immediate prior conversation turn carefully to answer the user's inquiry accurately.
 
 STRICT AUDIT RULES:
 1. Grounding: Rely ONLY on the provided Context and Immediate Prior Turn. Do NOT use outside general knowledge or hallucinate.
-2. Disambiguation: If the current query asks for financial metrics without specifying a company, and no company is identifiable from the immediately preceding message, ask: "Which company's filings would you like me to audit? (e.g., Apple, Microsoft, NVIDIA)".
-3. Precision: Cite exact fiscal years and monetary figures directly from the source text.
-4. Source Attribution: Always specify the source document name and page number for every data point.
-"""
+2. Disambiguation: If the current query asks for financial metrics without specifying a company, and no company is identifiable from the immediately preceding message, you MUST output ONLY: "Which company's filings would you like me to audit? (e.g., Apple, Microsoft, NVIDIA)".
+3. Direct Output: Output ONLY the final audit response. Do NOT output your reasoning, internal thoughts, bulleted analysis of rules, or planning steps.
+4. Precision: Cite exact fiscal years and monetary figures directly from the source text.
+5. Source Attribution: Always specify the source document name and page number for every data point."""
 
 def generate_answer(query: str, chat_history: list = None):
     retriever = get_retriever(k=8)
@@ -71,25 +70,30 @@ def generate_answer(query: str, chat_history: list = None):
         }
 
     api_key = str(api_key).strip().strip('"').strip("'")
-    
-    prompt_content = f"""{SYSTEM_PROMPT}
 
-Immediate Previous Turn:
+    # Structured prompt with system_instruction support
+    user_prompt = f"""[IMMEDIATE PREVIOUS TURN]
 {history_context if history_context else 'None'}
 
-Retrieved SEC Filings Context:
+[CONTEXT DOCUMENTS]
 {context_text}
 
-Current User Query: {query}
-
-Audit Answer:"""
+[USER QUESTION]
+{query}"""
 
     payload = {
+        "system_instruction": {
+            "parts": [{"text": SYSTEM_PROMPT}]
+        },
         "contents": [
             {
-                "parts": [{"text": prompt_content}]
+                "role": "user",
+                "parts": [{"text": user_prompt}]
             }
-        ]
+        ],
+        "generationConfig": {
+            "temperature": 0.1
+        }
     }
 
     # Discover only valid, supported models for this specific API Key
@@ -106,22 +110,25 @@ Audit Answer:"""
     except Exception:
         pass
 
-    # Fallback to defaults if model listing fails
     if not available_models:
         available_models = ["models/gemini-3.6-flash"]
 
     answer_text = None
     last_err_msg = ""
 
-    # Iterate through only verified, existing models
     for model_name in available_models:
         url = f"https://generativelanguage.googleapis.com/v1beta/{model_name}:generateContent?key={api_key}"
         res = requests.post(url, json=payload, headers={"Content-Type": "application/json"}, timeout=30)
         
         if res.status_code == 200:
             data = res.json()
-            answer_text = data["candidates"][0]["content"]["parts"][0]["text"]
-            break
+            candidates = data.get("candidates", [])
+            if candidates and "content" in candidates[0]:
+                parts = candidates[0]["content"].get("parts", [])
+                if parts:
+                    answer_text = parts[0].get("text", "").strip()
+            if answer_text:
+                break
         elif res.status_code == 429:
             last_err_msg = "Rate limit reached on free tier. Please wait 15–20 seconds and try again."
             continue
