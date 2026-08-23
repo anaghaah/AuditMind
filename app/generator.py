@@ -1,6 +1,6 @@
 import os
+import requests
 import streamlit as st
-import google.generativeai as genai
 from app.retriever import get_retriever
 
 SYSTEM_PROMPT = """
@@ -24,7 +24,7 @@ def generate_answer(query: str):
         page_num = doc.metadata.get("page", 0) + 1
         context_text += f"\n[Document: {source_name} | Page: {page_num}]\n{doc.page_content}\n"
 
-    # Direct API key retrieval
+    # API key extraction
     api_key = os.getenv("GEMINI_API_KEY")
     if not api_key:
         try:
@@ -32,17 +32,35 @@ def generate_answer(query: str):
         except Exception:
             pass
 
-    genai.configure(api_key=api_key)
+    prompt_content = f"{SYSTEM_PROMPT}\n\nContext:\n{context_text}\n\nQuestion:\n{query}\n\nAudit Answer:"
+
+    # Direct REST API call (bypasses SDK bugs)
+    url = f"https://generativelanguage.googleapis.com/v1beta/models/gemini-1.5-flash:generateContent?key={api_key}"
+    payload = {
+        "contents": [
+            {
+                "parts": [{"text": prompt_content}]
+            }
+        ],
+        "generationConfig": {
+            "temperature": 0.0
+        }
+    }
+
+    response = requests.post(url, json=payload, headers={"Content-Type": "application/json"})
     
-    # Try gemini-2.0-flash, fallback to gemini-pro if needed
-    try:
-        model = genai.GenerativeModel("gemini-2.0-flash", system_instruction=SYSTEM_PROMPT)
-        user_message = f"Context:\n{context_text}\n\nQuestion:\n{query}\n\nAudit Answer:"
-        response = model.generate_content(user_message)
-    except Exception:
-        model = genai.GenerativeModel("gemini-pro")
-        user_message = f"{SYSTEM_PROMPT}\n\nContext:\n{context_text}\n\nQuestion:\n{query}\n\nAudit Answer:"
-        response = model.generate_content(user_message)
+    if response.status_code == 200:
+        data = response.json()
+        answer_text = data["candidates"][0]["content"]["parts"][0]["text"]
+    else:
+        # Fallback to gemini-pro if flash is restricted
+        url_pro = f"https://generativelanguage.googleapis.com/v1beta/models/gemini-pro:generateContent?key={api_key}"
+        res_pro = requests.post(url_pro, json=payload, headers={"Content-Type": "application/json"})
+        if res_pro.status_code == 200:
+            data = res_pro.json()
+            answer_text = data["candidates"][0]["content"]["parts"][0]["text"]
+        else:
+            answer_text = f"API Error ({response.status_code}): {response.text}"
 
     sources = [
         f"Document Name: {os.path.basename(doc.metadata.get('source', 'Unknown'))} | Page Number: {doc.metadata.get('page', 0) + 1}"
@@ -50,6 +68,6 @@ def generate_answer(query: str):
     ]
 
     return {
-        "answer": response.text,
+        "answer": answer_text,
         "sources": list(set(sources))
     }

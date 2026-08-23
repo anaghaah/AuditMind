@@ -7,6 +7,6 @@ pypdf
 langchain
 langchain-community
 langchain-core
-google-generativeai
 chromadb
 sentence-transformers
+requests
