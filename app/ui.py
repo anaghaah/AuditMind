@@ -2,7 +2,6 @@ import os
 import sys
 import streamlit as st
 
-# Ensure root directory is in Python path for Streamlit Cloud
 sys.path.append(os.path.abspath(os.path.join(os.path.dirname(__file__), "..")))
 
 try:
@@ -35,11 +34,17 @@ with st.sidebar:
 st.title("📊 Financial Document Auditor")
 st.write("Ask any questions regarding the processed 10-K financial reports.")
 
-if "messages" not in st.session_state:
+# Initialize persistent message session state
+if "messages" not in st.session_state or len(st.session_state.messages) == 0:
     st.session_state.messages = [
-        {"role": "assistant", "content": "Hello! I am your AuditMind AI auditor. How can I assist you with your document analysis today?", "sources": []}
+        {
+            "role": "assistant",
+            "content": "Hello! I am your AuditMind AI auditor. How can I assist you with your document analysis today?",
+            "sources": []
+        }
     ]
 
+# Display all prior messages in state
 for msg in st.session_state.messages:
     with st.chat_message(msg["role"]):
         st.markdown(msg["content"])
@@ -48,14 +53,14 @@ for msg in st.session_state.messages:
             for src in msg["sources"]:
                 st.markdown(f"- {src}")
 
+# Handle new user input
 if prompt := st.chat_input("Ask a financial question (e.g., What is the total revenue for 2025?)..."):
-    st.session_state.messages.append({"role": "user", "content": prompt, "sources": []})
     with st.chat_message("user"):
         st.markdown(prompt)
 
     with st.chat_message("assistant"):
         with st.spinner("Analyzing SEC 10-K filings..."):
-            result = generate_answer(prompt)
+            result = generate_answer(prompt, chat_history=st.session_state.messages)
             answer = result["answer"]
             sources = result["sources"]
 
@@ -65,8 +70,10 @@ if prompt := st.chat_input("Ask a financial question (e.g., What is the total re
                 for src in sources:
                     st.markdown(f"- {src}")
 
-            st.session_state.messages.append({
-                "role": "assistant",
-                "content": answer,
-                "sources": sources
-            })
+    # Append interaction to persistent history
+    st.session_state.messages.append({"role": "user", "content": prompt, "sources": []})
+    st.session_state.messages.append({
+        "role": "assistant",
+        "content": answer,
+        "sources": sources
+    })

@@ -5,18 +5,35 @@ from app.retriever import get_retriever
 
 SYSTEM_PROMPT = """
 You are AuditMind AI, an enterprise-grade financial auditing assistant specialized in SEC 10-K filings.
-Analyze the provided context documents carefully and answer the user's inquiry accurately.
+Analyze the provided context documents and prior conversation history carefully to answer the user's inquiry accurately.
 
 STRICT AUDIT RULES:
-1. Grounding: Rely ONLY on the provided Context. Do NOT use outside general knowledge or hallucinate.
-2. Mandatory Company Check: If the user's question asks for financial metrics (such as revenue, net income, cash flow, expenses) WITHOUT explicitly naming the target company (e.g., Apple, Microsoft, NVIDIA), do NOT assume or answer from the context. You MUST immediately respond: "Which company's filings would you like me to audit? (e.g., Apple, Microsoft, NVIDIA)".
-3. Precision: Cite exact fiscal years and monetary figures directly from the source text.
-4. Source Attribution: Always specify the source document name and page number for every data point.
+1. Grounding: Rely ONLY on the provided Context and Conversation History. Do NOT use outside general knowledge or hallucinate.
+2. Disambiguation: If the user asks for financial metrics without specifying a company, and the company was NOT mentioned in previous messages, ask: "Which company's filings would you like me to audit? (e.g., Apple, Microsoft, NVIDIA)".
+3. Conversation Continuity: If the user provides a follow-up answer (e.g., naming a company or year), evaluate it in the context of previous questions.
+4. Precision: Cite exact fiscal years and monetary figures directly from the source text.
+5. Source Attribution: Always specify the source document name and page number for every data point.
 """
 
-def generate_answer(query: str):
-    retriever = get_retriever()
-    relevant_docs = retriever.invoke(query)
+def generate_answer(query: str, chat_history: list = None):
+    # Construct a contextual search query from full conversation history
+    search_query = query
+    history_context = ""
+    
+    if chat_history:
+        recent_turns = []
+        for msg in chat_history:
+            role = "User" if msg["role"] == "user" else "Auditor"
+            recent_turns.append(f"{role}: {msg['content']}")
+        history_context = "\n".join(recent_turns)
+        
+        # Combine user messages to form an enriched query for vector retrieval
+        user_queries = [m["content"] for m in chat_history if m["role"] == "user"]
+        if user_queries:
+            search_query = " ".join(user_queries[-2:]) + f" {query}"
+
+    retriever = get_retriever(k=6)
+    relevant_docs = retriever.invoke(search_query)
 
     context_text = ""
     for doc in relevant_docs:
@@ -37,7 +54,18 @@ def generate_answer(query: str):
         }
 
     api_key = str(api_key).strip().strip('"').strip("'")
-    prompt_content = f"{SYSTEM_PROMPT}\n\nContext:\n{context_text}\n\nQuestion:\n{query}\n\nAudit Answer:"
+    
+    prompt_content = f"""{SYSTEM_PROMPT}
+
+Conversation History:
+{history_context}
+
+Retrieved SEC Filings Context:
+{context_text}
+
+Latest User Query: {query}
+
+Audit Answer:"""
 
     url = f"https://generativelanguage.googleapis.com/v1beta/models/gemini-3.6-flash:generateContent?key={api_key}"
     payload = {
@@ -56,16 +84,14 @@ def generate_answer(query: str):
     else:
         answer_text = f"API Error: {res.text}"
 
-    # Filter out sources that weren't used by the LLM in its response
+    # Filter out sources that weren't cited
     used_sources = []
     for doc in relevant_docs:
         source_name = os.path.basename(doc.metadata.get("source", "Unknown"))
         page_num = doc.metadata.get("page", 0) + 1
-        
         if source_name in answer_text:
             used_sources.append(f"Document Name: {source_name} | Page Number: {page_num}")
 
-    # Fallback to all retrieved documents if no explicit file name was tagged
     final_sources = list(set(used_sources)) if used_sources else list(set([
         f"Document Name: {os.path.basename(d.metadata.get('source', 'Unknown'))} | Page Number: {d.metadata.get('page', 0) + 1}"
         for d in relevant_docs
