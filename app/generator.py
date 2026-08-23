@@ -1,5 +1,4 @@
 import os
-import time
 import requests
 import streamlit as st
 from app.retriever import get_retriever
@@ -93,19 +92,30 @@ Audit Answer:"""
         ]
     }
 
-    # Model fallback hierarchy in case of 429 quota exhaustion
-    model_endpoints = [
-        "https://generativelanguage.googleapis.com/v1beta/models/gemini-3.6-flash:generateContent",
-        "https://generativelanguage.googleapis.com/v1beta/models/gemini-2.5-flash:generateContent",
-        "https://generativelanguage.googleapis.com/v1beta/models/gemini-2.0-flash:generateContent",
-        "https://generativelanguage.googleapis.com/v1beta/models/gemini-1.5-flash-8b:generateContent"
-    ]
+    # Discover only valid, supported models for this specific API Key
+    available_models = []
+    try:
+        models_resp = requests.get(
+            f"https://generativelanguage.googleapis.com/v1beta/models?key={api_key}",
+            timeout=10
+        )
+        if models_resp.status_code == 200:
+            for item in models_resp.json().get("models", []):
+                if "generateContent" in item.get("supportedGenerationMethods", []):
+                    available_models.append(item["name"])
+    except Exception:
+        pass
+
+    # Fallback to defaults if model listing fails
+    if not available_models:
+        available_models = ["models/gemini-3.6-flash"]
 
     answer_text = None
     last_err_msg = ""
 
-    for endpoint in model_endpoints:
-        url = f"{endpoint}?key={api_key}"
+    # Iterate through only verified, existing models
+    for model_name in available_models:
+        url = f"https://generativelanguage.googleapis.com/v1beta/{model_name}:generateContent?key={api_key}"
         res = requests.post(url, json=payload, headers={"Content-Type": "application/json"}, timeout=30)
         
         if res.status_code == 200:
@@ -113,8 +123,8 @@ Audit Answer:"""
             answer_text = data["candidates"][0]["content"]["parts"][0]["text"]
             break
         elif res.status_code == 429:
-            last_err_msg = "Rate limit reached. Please wait ~15 seconds and try again."
-            continue  # Try the next model endpoint immediately
+            last_err_msg = "Rate limit reached on free tier. Please wait 15–20 seconds and try again."
+            continue
         else:
             last_err_msg = f"API Error ({res.status_code}): {res.text}"
 
