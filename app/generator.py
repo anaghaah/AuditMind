@@ -31,10 +31,19 @@ def generate_answer(query: str):
         page_num = doc.metadata.get("page", 0) + 1
         context_text += f"\n[Document: {source_name} | Page: {page_num}]\n{doc.page_content}\n"
 
+    # Fetch API Key from environment or Streamlit Secrets
+    api_key = os.getenv("GEMINI_API_KEY")
+    if not api_key:
+        try:
+            import streamlit as st
+            api_key = st.secrets.get("GEMINI_API_KEY")
+        except Exception:
+            pass
+
     llm = ChatGoogleGenerativeAI(
-        model="gemini-1.5-flash-latest",
+        model="gemini-1.5-flash",
         temperature=0.0,
-        google_api_key=os.getenv("GEMINI_API_KEY")
+        google_api_key=api_key
     )
 
     formatted_prompt = SYSTEM_PROMPT.format(context=context_text, question=query)
