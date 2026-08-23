@@ -10,11 +10,12 @@ STRICT AUDIT RULES:
 1. Grounding: Rely ONLY on the provided Context and Immediate Prior Turn. Do NOT use outside general knowledge or hallucinate.
 2. Disambiguation: If the current query asks for financial metrics without specifying a company, and no company is identifiable from the immediately preceding message, you MUST respond: "Which company's filings would you like me to audit? (e.g., Apple, Microsoft, NVIDIA)".
 3. Direct Output: Output ONLY the final audit response. Do not output your thinking, scratchpads, or analysis of rules.
-4. Precision: Cite exact fiscal years and monetary figures directly from the source text.
+4. Precision: Cite exact fiscal years and monetary figures directly from the source text. Look closely at tables titled Consolidated Statements of Income / Operations / Net Sales.
 5. Source Attribution: Always specify the source document name and page number for every data point."""
 
 def generate_answer(query: str, chat_history: list = None):
-    retriever = get_retriever(k=8)
+    # Retrieve top 10 chunks to ensure financial statement tables are captured
+    retriever = get_retriever(k=10)
     
     # Extract only the immediate previous turn
     history_context = ""
@@ -33,17 +34,21 @@ def generate_answer(query: str, chat_history: list = None):
     mentioned_companies = [c for c in companies if c in query.lower()]
 
     relevant_docs = []
+    
+    # Multi-entity comparative query
     if "compare" in query.lower() or len(mentioned_companies) > 1:
         relevant_docs.extend(retriever.invoke(query))
         for comp in mentioned_companies:
-            relevant_docs.extend(retriever.invoke(f"{comp} total revenue net income financial results"))
+            relevant_docs.extend(retriever.invoke(f"{comp} Consolidated Statements of Income Operations total revenue net income"))
     else:
         search_query = query
         if last_user_query and len(query.strip().split()) <= 3:
-            search_query = f"{last_user_query} {query}"
+            # Expand entity follow-up to match income statement terminology
+            search_query = f"{query} {last_user_query} Consolidated Statements of Income Operations total revenue net sales"
+        
         relevant_docs = retriever.invoke(search_query)
 
-    # Deduplicate documents
+    # Deduplicate retrieved document chunks
     seen_chunks = set()
     unique_docs = []
     for doc in relevant_docs:
@@ -108,7 +113,6 @@ Audit Answer:"""
             if candidates and "content" in candidates[0]:
                 parts = candidates[0]["content"].get("parts", [])
                 
-                # Filter out thinking tags if present
                 clean_parts = []
                 for p in parts:
                     if not p.get("thought", False) and p.get("text"):
@@ -127,7 +131,7 @@ Audit Answer:"""
     except Exception as e:
         answer_text = f"Error processing audit query: {str(e)}"
 
-    # Clean markdown formatting if any chain-of-thought bullet bleed occurs
+    # Clean markdown if chain-of-thought rule text leaks
     if answer_text and "Rule 2" in answer_text and "Disambiguation" in answer_text:
         answer_text = "Which company's filings would you like me to audit? (e.g., Apple, Microsoft, NVIDIA)"
 
