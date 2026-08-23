@@ -8,10 +8,9 @@ Analyze the provided context documents and immediate prior conversation turn car
 
 STRICT AUDIT RULES:
 1. Grounding: Rely ONLY on the provided Context and Immediate Prior Turn. Do NOT use outside general knowledge or hallucinate.
-2. Disambiguation: If the current query asks for financial metrics without specifying a company, and no company is identifiable from the immediately preceding message, you MUST output ONLY: "Which company's filings would you like me to audit? (e.g., Apple, Microsoft, NVIDIA)".
-3. Direct Output: Output ONLY the final audit response. Do NOT output your reasoning, internal thoughts, bulleted analysis of rules, or planning steps.
-4. Precision: Cite exact fiscal years and monetary figures directly from the source text.
-5. Source Attribution: Always specify the source document name and page number for every data point."""
+2. Disambiguation: If the current query asks for financial metrics without specifying a company, and no company is identifiable from the immediately preceding message, you MUST respond: "Which company's filings would you like me to audit? (e.g., Apple, Microsoft, NVIDIA)".
+3. Precision: Cite exact fiscal years and monetary figures directly from the source text.
+4. Source Attribution: Always specify the source document name and page number for every data point."""
 
 def generate_answer(query: str, chat_history: list = None):
     retriever = get_retriever(k=8)
@@ -71,7 +70,6 @@ def generate_answer(query: str, chat_history: list = None):
 
     api_key = str(api_key).strip().strip('"').strip("'")
 
-    # Structured prompt with system_instruction support
     user_prompt = f"""[IMMEDIATE PREVIOUS TURN]
 {history_context if history_context else 'None'}
 
@@ -92,11 +90,14 @@ def generate_answer(query: str, chat_history: list = None):
             }
         ],
         "generationConfig": {
-            "temperature": 0.1
+            "temperature": 0.1,
+            "thinkingConfig": {
+                "thinkingBudget": 0
+            }
         }
     }
 
-    # Discover only valid, supported models for this specific API Key
+    # Discover valid active models for this API Key
     available_models = []
     try:
         models_resp = requests.get(
@@ -120,13 +121,30 @@ def generate_answer(query: str, chat_history: list = None):
         url = f"https://generativelanguage.googleapis.com/v1beta/{model_name}:generateContent?key={api_key}"
         res = requests.post(url, json=payload, headers={"Content-Type": "application/json"}, timeout=30)
         
+        # Fallback without thinkingConfig if model doesn't accept thinkingBudget parameter
+        if res.status_code == 400 and "thinking" in res.text.lower():
+            fallback_payload = {
+                "system_instruction": payload["system_instruction"],
+                "contents": payload["contents"],
+                "generationConfig": {"temperature": 0.1}
+            }
+            res = requests.post(url, json=fallback_payload, headers={"Content-Type": "application/json"}, timeout=30)
+
         if res.status_code == 200:
             data = res.json()
             candidates = data.get("candidates", [])
             if candidates and "content" in candidates[0]:
                 parts = candidates[0]["content"].get("parts", [])
-                if parts:
-                    answer_text = parts[0].get("text", "").strip()
+                
+                # 1. Filter out parts that are marked as internal thoughts
+                non_thought_parts = [p.get("text", "") for p in parts if not p.get("thought", False) and p.get("text")]
+                
+                if non_thought_parts:
+                    answer_text = "\n".join(non_thought_parts).strip()
+                elif parts:
+                    # Fallback to last part if no explicit flag is set
+                    answer_text = parts[-1].get("text", "").strip()
+
             if answer_text:
                 break
         elif res.status_code == 429:
