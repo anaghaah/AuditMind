@@ -1,4 +1,5 @@
 import os
+import time
 import requests
 import streamlit as st
 from app.retriever import get_retriever
@@ -17,16 +18,14 @@ STRICT AUDIT RULES:
 def generate_answer(query: str, chat_history: list = None):
     retriever = get_retriever(k=8)
     
-    # Extract ONLY the immediate last turn (last user prompt & assistant response)
+    # Extract only the immediate previous turn
     history_context = ""
     last_user_query = ""
     if chat_history and len(chat_history) > 1:
-        # Get only the last 2 messages (1 user, 1 assistant)
         immediate_prior_turn = chat_history[-2:]
         recent_turns = [f"{'User' if m['role'] == 'user' else 'Auditor'}: {m['content']}" for m in immediate_prior_turn]
         history_context = "\n".join(recent_turns)
         
-        # Identify the previous user prompt for retrieval context if needed
         for m in reversed(immediate_prior_turn):
             if m["role"] == "user":
                 last_user_query = m["content"]
@@ -42,12 +41,10 @@ def generate_answer(query: str, chat_history: list = None):
             relevant_docs.extend(retriever.invoke(f"{comp} total revenue net income financial results"))
     else:
         search_query = query
-        # If the user typed a short follow-up (<= 3 words), attach only the immediate previous question
         if last_user_query and len(query.strip().split()) <= 3:
             search_query = f"{last_user_query} {query}"
         relevant_docs = retriever.invoke(search_query)
 
-    # Deduplicate documents
     seen_chunks = set()
     unique_docs = []
     for doc in relevant_docs:
@@ -88,7 +85,6 @@ Current User Query: {query}
 
 Audit Answer:"""
 
-    url = f"https://generativelanguage.googleapis.com/v1beta/models/gemini-3.6-flash:generateContent?key={api_key}"
     payload = {
         "contents": [
             {
@@ -97,13 +93,33 @@ Audit Answer:"""
         ]
     }
 
-    res = requests.post(url, json=payload, headers={"Content-Type": "application/json"}, timeout=30)
+    # Model fallback hierarchy in case of 429 quota exhaustion
+    model_endpoints = [
+        "https://generativelanguage.googleapis.com/v1beta/models/gemini-3.6-flash:generateContent",
+        "https://generativelanguage.googleapis.com/v1beta/models/gemini-2.5-flash:generateContent",
+        "https://generativelanguage.googleapis.com/v1beta/models/gemini-2.0-flash:generateContent",
+        "https://generativelanguage.googleapis.com/v1beta/models/gemini-1.5-flash-8b:generateContent"
+    ]
 
-    if res.status_code == 200:
-        data = res.json()
-        answer_text = data["candidates"][0]["content"]["parts"][0]["text"]
-    else:
-        answer_text = f"API Error: {res.text}"
+    answer_text = None
+    last_err_msg = ""
+
+    for endpoint in model_endpoints:
+        url = f"{endpoint}?key={api_key}"
+        res = requests.post(url, json=payload, headers={"Content-Type": "application/json"}, timeout=30)
+        
+        if res.status_code == 200:
+            data = res.json()
+            answer_text = data["candidates"][0]["content"]["parts"][0]["text"]
+            break
+        elif res.status_code == 429:
+            last_err_msg = "Rate limit reached. Please wait ~15 seconds and try again."
+            continue  # Try the next model endpoint immediately
+        else:
+            last_err_msg = f"API Error ({res.status_code}): {res.text}"
+
+    if not answer_text:
+        answer_text = last_err_msg
 
     used_sources = []
     for doc in unique_docs:
