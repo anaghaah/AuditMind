@@ -33,10 +33,16 @@ def generate_answer(query: str):
             pass
 
     genai.configure(api_key=api_key)
-    model = genai.GenerativeModel("gemini-1.5-flash", system_instruction=SYSTEM_PROMPT)
-
-    user_message = f"Context:\n{context_text}\n\nQuestion:\n{query}\n\nAudit Answer:"
-    response = model.generate_content(user_message)
+    
+    # Try gemini-2.0-flash, fallback to gemini-pro if needed
+    try:
+        model = genai.GenerativeModel("gemini-2.0-flash", system_instruction=SYSTEM_PROMPT)
+        user_message = f"Context:\n{context_text}\n\nQuestion:\n{query}\n\nAudit Answer:"
+        response = model.generate_content(user_message)
+    except Exception:
+        model = genai.GenerativeModel("gemini-pro")
+        user_message = f"{SYSTEM_PROMPT}\n\nContext:\n{context_text}\n\nQuestion:\n{query}\n\nAudit Answer:"
+        response = model.generate_content(user_message)
 
     sources = [
         f"Document Name: {os.path.basename(doc.metadata.get('source', 'Unknown'))} | Page Number: {doc.metadata.get('page', 0) + 1}"
