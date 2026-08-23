@@ -1,4 +1,5 @@
 import os
+import streamlit as st
 from langchain_google_genai import ChatGoogleGenerativeAI
 from app.retriever import get_retriever
 
@@ -31,16 +32,14 @@ def generate_answer(query: str):
         page_num = doc.metadata.get("page", 0) + 1
         context_text += f"\n[Document: {source_name} | Page: {page_num}]\n{doc.page_content}\n"
 
-    # Fetch API Key
+    # Fetch API Key securely
     api_key = os.getenv("GEMINI_API_KEY")
     if not api_key:
         try:
-            import streamlit as st
-            api_key = st.secrets.get("GEMINI_API_KEY")
+            api_key = st.secrets["GEMINI_API_KEY"]
         except Exception:
             pass
 
-    # Use explicit model path format
     llm = ChatGoogleGenerativeAI(
         model="gemini-1.5-flash",
         temperature=0.0,
