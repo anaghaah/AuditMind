@@ -32,7 +32,7 @@ def generate_answer(query: str):
         context_text += f"\n[Document: {source_name} | Page: {page_num}]\n{doc.page_content}\n"
 
     llm = ChatGoogleGenerativeAI(
-        model="gemini-1.5-flash",
+        model="gemini-1.5-flash-latest",
         temperature=0.0,
         google_api_key=os.getenv("GEMINI_API_KEY")
     )
