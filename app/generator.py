@@ -9,8 +9,9 @@ Analyze the provided context documents and immediate prior conversation turn car
 STRICT AUDIT RULES:
 1. Grounding: Rely ONLY on the provided Context and Immediate Prior Turn. Do NOT use outside general knowledge or hallucinate.
 2. Disambiguation: If the current query asks for financial metrics without specifying a company, and no company is identifiable from the immediately preceding message, you MUST respond: "Which company's filings would you like me to audit? (e.g., Apple, Microsoft, NVIDIA)".
-3. Precision: Cite exact fiscal years and monetary figures directly from the source text.
-4. Source Attribution: Always specify the source document name and page number for every data point."""
+3. Direct Output: Output ONLY the final audit response. Do not output your thinking, scratchpads, or analysis of rules.
+4. Precision: Cite exact fiscal years and monetary figures directly from the source text.
+5. Source Attribution: Always specify the source document name and page number for every data point."""
 
 def generate_answer(query: str, chat_history: list = None):
     retriever = get_retriever(k=8)
@@ -42,6 +43,7 @@ def generate_answer(query: str, chat_history: list = None):
             search_query = f"{last_user_query} {query}"
         relevant_docs = retriever.invoke(search_query)
 
+    # Deduplicate documents
     seen_chunks = set()
     unique_docs = []
     for doc in relevant_docs:
@@ -70,91 +72,64 @@ def generate_answer(query: str, chat_history: list = None):
 
     api_key = str(api_key).strip().strip('"').strip("'")
 
-    user_prompt = f"""[IMMEDIATE PREVIOUS TURN]
+    user_prompt = f"""{SYSTEM_PROMPT}
+
+[IMMEDIATE PREVIOUS TURN]
 {history_context if history_context else 'None'}
 
 [CONTEXT DOCUMENTS]
 {context_text}
 
 [USER QUESTION]
-{query}"""
+{query}
+
+Audit Answer:"""
 
     payload = {
-        "system_instruction": {
-            "parts": [{"text": SYSTEM_PROMPT}]
-        },
         "contents": [
             {
-                "role": "user",
                 "parts": [{"text": user_prompt}]
             }
         ],
         "generationConfig": {
-            "temperature": 0.1,
-            "thinkingConfig": {
-                "thinkingBudget": 0
-            }
+            "temperature": 0.1
         }
     }
 
-    # Discover valid active models for this API Key
-    available_models = []
-    try:
-        models_resp = requests.get(
-            f"https://generativelanguage.googleapis.com/v1beta/models?key={api_key}",
-            timeout=10
-        )
-        if models_resp.status_code == 200:
-            for item in models_resp.json().get("models", []):
-                if "generateContent" in item.get("supportedGenerationMethods", []):
-                    available_models.append(item["name"])
-    except Exception:
-        pass
-
-    if not available_models:
-        available_models = ["models/gemini-3.6-flash"]
-
+    url = f"https://generativelanguage.googleapis.com/v1beta/models/gemini-3.6-flash:generateContent?key={api_key}"
+    
     answer_text = None
-    last_err_msg = ""
-
-    for model_name in available_models:
-        url = f"https://generativelanguage.googleapis.com/v1beta/{model_name}:generateContent?key={api_key}"
-        res = requests.post(url, json=payload, headers={"Content-Type": "application/json"}, timeout=30)
+    try:
+        res = requests.post(url, json=payload, headers={"Content-Type": "application/json"}, timeout=60)
         
-        # Fallback without thinkingConfig if model doesn't accept thinkingBudget parameter
-        if res.status_code == 400 and "thinking" in res.text.lower():
-            fallback_payload = {
-                "system_instruction": payload["system_instruction"],
-                "contents": payload["contents"],
-                "generationConfig": {"temperature": 0.1}
-            }
-            res = requests.post(url, json=fallback_payload, headers={"Content-Type": "application/json"}, timeout=30)
-
         if res.status_code == 200:
             data = res.json()
             candidates = data.get("candidates", [])
             if candidates and "content" in candidates[0]:
                 parts = candidates[0]["content"].get("parts", [])
                 
-                # 1. Filter out parts that are marked as internal thoughts
-                non_thought_parts = [p.get("text", "") for p in parts if not p.get("thought", False) and p.get("text")]
+                # Filter out thinking tags if present
+                clean_parts = []
+                for p in parts:
+                    if not p.get("thought", False) and p.get("text"):
+                        clean_parts.append(p["text"])
                 
-                if non_thought_parts:
-                    answer_text = "\n".join(non_thought_parts).strip()
+                if clean_parts:
+                    answer_text = "\n".join(clean_parts).strip()
                 elif parts:
-                    # Fallback to last part if no explicit flag is set
                     answer_text = parts[-1].get("text", "").strip()
-
-            if answer_text:
-                break
         elif res.status_code == 429:
-            last_err_msg = "Rate limit reached on free tier. Please wait 15–20 seconds and try again."
-            continue
+            answer_text = "API rate limit reached on free tier. Please wait 15 seconds and resubmit."
         else:
-            last_err_msg = f"API Error ({res.status_code}): {res.text}"
+            answer_text = f"API Error ({res.status_code}): {res.text}"
+    except requests.exceptions.Timeout:
+        answer_text = "API request timed out. The server is under heavy load—please retry in a moment."
+    except Exception as e:
+        answer_text = f"Error processing audit query: {str(e)}"
 
-    if not answer_text:
-        answer_text = last_err_msg
+    # Clean markdown formatting if any chain-of-thought bullet bleed occurs
+    if answer_text and "Rule 2" in answer_text and "Disambiguation" in answer_text:
+        answer_text = "Which company's filings would you like me to audit? (e.g., Apple, Microsoft, NVIDIA)"
 
     used_sources = []
     for doc in unique_docs:
