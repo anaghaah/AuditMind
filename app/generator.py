@@ -30,6 +30,12 @@ def generate_answer(query: str):
     except Exception:
         api_key = os.getenv("GEMINI_API_KEY")
 
+    if not api_key:
+        return {
+            "answer": "Error: GEMINI_API_KEY not found in Streamlit Secrets or environment variables.",
+            "sources": []
+        }
+
     api_key = str(api_key).strip().strip('"').strip("'")
     prompt_content = f"{SYSTEM_PROMPT}\n\nContext:\n{context_text}\n\nQuestion:\n{query}\n\nAudit Answer:"
 
@@ -50,12 +56,22 @@ def generate_answer(query: str):
     else:
         answer_text = f"API Error: {res.text}"
 
-    sources = [
-        f"Document Name: {os.path.basename(doc.metadata.get('source', 'Unknown'))} | Page Number: {doc.metadata.get('page', 0) + 1}"
-        for doc in relevant_docs
-    ]
+    # Filter out sources that weren't used by the LLM in its response
+    used_sources = []
+    for doc in relevant_docs:
+        source_name = os.path.basename(doc.metadata.get("source", "Unknown"))
+        page_num = doc.metadata.get("page", 0) + 1
+        
+        if source_name in answer_text:
+            used_sources.append(f"Document Name: {source_name} | Page Number: {page_num}")
+
+    # Fallback to all retrieved documents if no explicit file name was tagged
+    final_sources = list(set(used_sources)) if used_sources else list(set([
+        f"Document Name: {os.path.basename(d.metadata.get('source', 'Unknown'))} | Page Number: {d.metadata.get('page', 0) + 1}"
+        for d in relevant_docs
+    ]))
 
     return {
         "answer": answer_text,
-        "sources": list(set(sources))
+        "sources": final_sources
     }
