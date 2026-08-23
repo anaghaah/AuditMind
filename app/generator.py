@@ -24,7 +24,7 @@ def generate_answer(query: str):
         page_num = doc.metadata.get("page", 0) + 1
         context_text += f"\n[Document: {source_name} | Page: {page_num}]\n{doc.page_content}\n"
 
-    # API key extraction
+    # Direct API key retrieval
     api_key = os.getenv("GEMINI_API_KEY")
     if not api_key:
         try:
@@ -34,8 +34,6 @@ def generate_answer(query: str):
 
     prompt_content = f"{SYSTEM_PROMPT}\n\nContext:\n{context_text}\n\nQuestion:\n{query}\n\nAudit Answer:"
 
-    # Direct REST API call (bypasses SDK bugs)
-    url = f"https://generativelanguage.googleapis.com/v1beta/models/gemini-1.5-flash:generateContent?key={api_key}"
     payload = {
         "contents": [
             {
@@ -47,20 +45,24 @@ def generate_answer(query: str):
         }
     }
 
-    response = requests.post(url, json=payload, headers={"Content-Type": "application/json"})
-    
-    if response.status_code == 200:
-        data = response.json()
-        answer_text = data["candidates"][0]["content"]["parts"][0]["text"]
-    else:
-        # Fallback to gemini-pro if flash is restricted
-        url_pro = f"https://generativelanguage.googleapis.com/v1beta/models/gemini-pro:generateContent?key={api_key}"
-        res_pro = requests.post(url_pro, json=payload, headers={"Content-Type": "application/json"})
-        if res_pro.status_code == 200:
-            data = res_pro.json()
+    # Use Stable v1 API & Active Fallback Endpoints
+    models_to_try = [
+        "https://generativelanguage.googleapis.com/v1beta/models/gemini-2.0-flash:generateContent",
+        "https://generativelanguage.googleapis.com/v1/models/gemini-1.5-flash:generateContent",
+        "https://generativelanguage.googleapis.com/v1beta/models/gemini-1.5-flash-8b:generateContent"
+    ]
+
+    answer_text = None
+    for endpoint in models_to_try:
+        url = f"{endpoint}?key={api_key}"
+        res = requests.post(url, json=payload, headers={"Content-Type": "application/json"})
+        if res.status_code == 200:
+            data = res.json()
             answer_text = data["candidates"][0]["content"]["parts"][0]["text"]
-        else:
-            answer_text = f"API Error ({response.status_code}): {response.text}"
+            break
+
+    if not answer_text:
+        answer_text = "Unable to generate audit answer. Please verify your GEMINI_API_KEY."
 
     sources = [
         f"Document Name: {os.path.basename(doc.metadata.get('source', 'Unknown'))} | Page Number: {doc.metadata.get('page', 0) + 1}"
