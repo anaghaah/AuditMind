@@ -1,5 +1,14 @@
+import os
+import sys
 import streamlit as st
-from app.generator import generate_answer
+
+# Ensure root directory is in Python path for Streamlit Cloud
+sys.path.append(os.path.abspath(os.path.join(os.path.dirname(__file__), "..")))
+
+try:
+    from app.generator import generate_answer
+except ImportError:
+    from generator import generate_answer
 
 st.set_page_config(page_title="AuditMind AI", page_icon="⚡", layout="wide")
 
