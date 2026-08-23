@@ -24,13 +24,21 @@ def generate_answer(query: str):
         page_num = doc.metadata.get("page", 0) + 1
         context_text += f"\n[Document: {source_name} | Page: {page_num}]\n{doc.page_content}\n"
 
-    # Direct API key retrieval
-    api_key = os.getenv("GEMINI_API_KEY")
+    # 1. Fetch API Key
+    api_key = None
+    try:
+        api_key = st.secrets["GEMINI_API_KEY"]
+    except Exception:
+        api_key = os.getenv("GEMINI_API_KEY")
+
     if not api_key:
-        try:
-            api_key = st.secrets["GEMINI_API_KEY"]
-        except Exception:
-            pass
+        return {
+            "answer": "Error: GEMINI_API_KEY not found in Streamlit Secrets or environment variables.",
+            "sources": []
+        }
+
+    # Clean the key in case of accidental surrounding quotes/spaces
+    api_key = str(api_key).strip().strip('"').strip("'")
 
     prompt_content = f"{SYSTEM_PROMPT}\n\nContext:\n{context_text}\n\nQuestion:\n{query}\n\nAudit Answer:"
 
@@ -39,30 +47,34 @@ def generate_answer(query: str):
             {
                 "parts": [{"text": prompt_content}]
             }
-        ],
-        "generationConfig": {
-            "temperature": 0.0
-        }
+        ]
     }
 
-    # Use Stable v1 API & Active Fallback Endpoints
-    models_to_try = [
-        "https://generativelanguage.googleapis.com/v1beta/models/gemini-2.0-flash:generateContent",
-        "https://generativelanguage.googleapis.com/v1/models/gemini-1.5-flash:generateContent",
-        "https://generativelanguage.googleapis.com/v1beta/models/gemini-1.5-flash-8b:generateContent"
+    # 2. Try generation directly with standard candidates
+    candidate_endpoints = [
+        f"https://generativelanguage.googleapis.com/v1beta/models/gemini-1.5-flash:generateContent?key={api_key}",
+        f"https://generativelanguage.googleapis.com/v1beta/models/gemini-1.5-pro:generateContent?key={api_key}",
+        f"https://generativelanguage.googleapis.com/v1beta/models/gemini-2.0-flash:generateContent?key={api_key}",
+        f"https://generativelanguage.googleapis.com/v1/models/gemini-1.5-flash:generateContent?key={api_key}"
     ]
 
     answer_text = None
-    for endpoint in models_to_try:
-        url = f"{endpoint}?key={api_key}"
-        res = requests.post(url, json=payload, headers={"Content-Type": "application/json"})
-        if res.status_code == 200:
-            data = res.json()
-            answer_text = data["candidates"][0]["content"]["parts"][0]["text"]
-            break
+    last_error = ""
+
+    for url in candidate_endpoints:
+        try:
+            res = requests.post(url, json=payload, headers={"Content-Type": "application/json"}, timeout=30)
+            if res.status_code == 200:
+                data = res.json()
+                answer_text = data["candidates"][0]["content"]["parts"][0]["text"]
+                break
+            else:
+                last_error = f"Status {res.status_code}: {res.text}"
+        except Exception as e:
+            last_error = str(e)
 
     if not answer_text:
-        answer_text = "Unable to generate audit answer. Please verify your GEMINI_API_KEY."
+        answer_text = f"API Error: {last_error}"
 
     sources = [
         f"Document Name: {os.path.basename(doc.metadata.get('source', 'Unknown'))} | Page Number: {doc.metadata.get('page', 0) + 1}"
