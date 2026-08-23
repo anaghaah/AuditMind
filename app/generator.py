@@ -24,7 +24,7 @@ def generate_answer(query: str):
         page_num = doc.metadata.get("page", 0) + 1
         context_text += f"\n[Document: {source_name} | Page: {page_num}]\n{doc.page_content}\n"
 
-    # 1. Fetch API Key
+    # API key
     api_key = None
     try:
         api_key = st.secrets["GEMINI_API_KEY"]
@@ -33,13 +33,11 @@ def generate_answer(query: str):
 
     if not api_key:
         return {
-            "answer": "Error: GEMINI_API_KEY not found in Streamlit Secrets or environment variables.",
+            "answer": "Error: GEMINI_API_KEY not found.",
             "sources": []
         }
 
-    # Clean the key in case of accidental surrounding quotes/spaces
     api_key = str(api_key).strip().strip('"').strip("'")
-
     prompt_content = f"{SYSTEM_PROMPT}\n\nContext:\n{context_text}\n\nQuestion:\n{query}\n\nAudit Answer:"
 
     payload = {
@@ -50,31 +48,40 @@ def generate_answer(query: str):
         ]
     }
 
-    # 2. Try generation directly with standard candidates
-    candidate_endpoints = [
-        f"https://generativelanguage.googleapis.com/v1beta/models/gemini-1.5-flash:generateContent?key={api_key}",
-        f"https://generativelanguage.googleapis.com/v1beta/models/gemini-1.5-pro:generateContent?key={api_key}",
-        f"https://generativelanguage.googleapis.com/v1beta/models/gemini-2.0-flash:generateContent?key={api_key}",
-        f"https://generativelanguage.googleapis.com/v1/models/gemini-1.5-flash:generateContent?key={api_key}"
-    ]
+    # Step A: Dynamically list supported models for your API key
+    list_url = f"https://generativelanguage.googleapis.com/v1beta/models?key={api_key}"
+    target_model = None
 
-    answer_text = None
-    last_error = ""
+    try:
+        res = requests.get(list_url, timeout=10)
+        if res.status_code == 200:
+            models_data = res.json().get("models", [])
+            # Prioritize flash or any generateContent capable model
+            for m in models_data:
+                methods = m.get("supportedGenerationMethods", [])
+                name = m.get("name", "")
+                if "generateContent" in methods:
+                    if "flash" in name:
+                        target_model = name
+                        break
+                    elif not target_model:
+                        target_model = name
+    except Exception:
+        pass
 
-    for url in candidate_endpoints:
-        try:
-            res = requests.post(url, json=payload, headers={"Content-Type": "application/json"}, timeout=30)
-            if res.status_code == 200:
-                data = res.json()
-                answer_text = data["candidates"][0]["content"]["parts"][0]["text"]
-                break
-            else:
-                last_error = f"Status {res.status_code}: {res.text}"
-        except Exception as e:
-            last_error = str(e)
+    # Fallback to gemini-2.5-flash or gemini-2.0-flash if list failed
+    if not target_model:
+        target_model = "models/gemini-2.5-flash"
 
-    if not answer_text:
-        answer_text = f"API Error: {last_error}"
+    # Step B: Call the active model
+    generate_url = f"https://generativelanguage.googleapis.com/v1beta/{target_model}:generateContent?key={api_key}"
+    res = requests.post(generate_url, json=payload, headers={"Content-Type": "application/json"}, timeout=30)
+
+    if res.status_code == 200:
+        data = res.json()
+        answer_text = data["candidates"][0]["content"]["parts"][0]["text"]
+    else:
+        answer_text = f"API Error ({res.status_code}): {res.text}"
 
     sources = [
         f"Document Name: {os.path.basename(doc.metadata.get('source', 'Unknown'))} | Page Number: {doc.metadata.get('page', 0) + 1}"
